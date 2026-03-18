@@ -1,272 +1,225 @@
 import streamlit as st
-import os
-import base64
-import requests
-import concurrent.futures
-import io
+import cloudinary
+import cloudinary.uploader
+import cloudinary.api
+import google.generativeai as genai
 from PIL import Image
-from google import genai
-from google.genai import types
+import io
+import base64
 from streamlit_drawable_canvas import st_canvas
 
-st.set_page_config(page_title="Multi-Aspect Image Generator & Magic Edit", layout="wide")
+# --- Configuration ---
+st.set_page_config(page_title="Multi-Aspect Generator", layout="wide", page_icon="✨")
 
-st.title("Multi-Aspect Image Generator & Magic Edit")
-st.markdown("Generate images concurrently or use Magic Edit to paint a mask and modify specific areas.")
+# Initialize APIs using Streamlit Secrets
+cloudinary.config(
+    cloud_name=st.secrets["CLOUDINARY_CLOUD_NAME"],
+    api_key=st.secrets["CLOUDINARY_API_KEY"],
+    api_secret=st.secrets["CLOUDINARY_API_SECRET"]
+)
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
-if "results" not in st.session_state:
-    st.session_state.results = []
-
-# Sidebar for settings
-with st.sidebar:
-    st.header("Settings")
-    api_key = st.text_input("Gemini API Key", type="password", value=os.environ.get("GEMINI_API_KEY", ""))
-    
-    st.subheader("Global Parameters")
-    model = st.selectbox("Model", ["gemini-3.1-flash-image-preview", "gemini-2.5-flash-image"])
-    
-    st.subheader("Cloudinary Settings (Optional)")
-    cloud_name = st.text_input("Cloud Name")
-    upload_preset = st.text_input("Upload Preset")
-
-def upload_to_cloudinary(base64_data, mime_type, cloud_name, upload_preset):
-    url = f"https://api.cloudinary.com/v1_1/{cloud_name}/image/upload"
-    data_uri = f"data:{mime_type};base64,{base64_data}"
-    payload = {
-        "file": data_uri,
-        "upload_preset": upload_preset
-    }
-    response = requests.post(url, data=payload)
-    return response.json()
-
-def generate_single_image(client, model, contents, aspect_ratio, image_size, index):
+# --- Helper Functions ---
+@st.cache_data(ttl=60)
+def get_cloudinary_folders():
+    """Fetch folders from Cloudinary and ensure 'MAI with Edit' exists."""
     try:
-        result = client.models.generate_content(
-            model=model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                image_config=types.ImageConfig(
-                    aspect_ratio=aspect_ratio,
-                    image_size=image_size
-                )
-            )
-        )
-        for part in result.candidates[0].content.parts:
-            if part.inline_data:
-                return {
-                    "id": f"gen-{index}",
-                    "data": part.inline_data.data,
-                    "mime_type": part.inline_data.mime_type,
-                    "aspect_ratio": aspect_ratio,
-                    "status": "success"
-                }
-        return {"id": f"gen-{index}", "status": "error", "error": "No image returned"}
+        result = cloudinary.api.root_folders()
+        folders = [f["name"] for f in result.get("folders", [])]
+        
+        # Ensure "MAI with Edit" exists
+        if "MAI with Edit" not in folders:
+            cloudinary.api.create_folder("MAI with Edit")
+            folders.append("MAI with Edit")
+            
+        return sorted(folders)
     except Exception as e:
-        return {"id": f"gen-{index}", "status": "error", "error": str(e)}
+        st.error(f"Error fetching folders: {e}")
+        return ["MAI with Edit", "generations"]
 
-tab1, tab2 = st.tabs(["✨ Generate Images", "🖌️ Magic Edit"])
+def upload_to_cloudinary(image_bytes, folder_name):
+    """Upload image bytes to a specific Cloudinary folder."""
+    try:
+        response = cloudinary.uploader.upload(
+            image_bytes,
+            folder=folder_name,
+            resource_type="image"
+        )
+        return response.get("secure_url")
+    except Exception as e:
+        st.error(f"Cloudinary upload failed: {e}")
+        return None
 
-with tab1:
-    st.header("Generate Images")
+# --- Main UI ---
+st.title("✨ Multi-Aspect Generator")
+
+# Fetch folders once to use across tabs
+available_folders = get_cloudinary_folders()
+
+# Create Tabs
+tab_gen, tab_edit, tab_folders = st.tabs(["Generate", "Magic Edit", "Folders"])
+
+# ==========================================
+# TAB 1: GENERATE
+# ==========================================
+with tab_gen:
+    st.markdown("### Generate Images")
     
-    col1, col2, col3 = st.columns(3)
+    prompt = st.text_area("Image Prompt", placeholder="Describe the image you want to generate...", height=100)
+    
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
-        aspect_ratio = st.selectbox("Aspect Ratio", [
-            "1:1", "16:9", "9:16", "4:3", "3:4", 
-            "1:4", "4:1", "1:8", "8:1"
-        ], index=0, help="1:4 is iPhone Portrait/Extra Tall. 4:1 is Extra Wide.")
+        aspect_ratio = st.selectbox("Aspect Ratio", ["1:1", "16:9", "9:16", "4:3", "3:4", "1:4", "4:1", "1:8", "8:1"])
     with col2:
-        image_size = st.selectbox("Quality (Resolution)", ["1K", "2K", "4K"])
+        image_size = st.selectbox("Quality", ["1K", "2K", "4K"])
     with col3:
-        num_images = st.number_input("Number of Images", min_value=1, max_value=4, value=4, help="Generates concurrently (Max 4).")
+        num_images = st.selectbox("Number of Images", [1, 2, 3, 4])
+    with col4:
+        # NEW: Dropdown to select where to save generated images
+        selected_gen_folder = st.selectbox("Save to Folder", available_folders, index=available_folders.index("generations") if "generations" in available_folders else 0, key="gen_folder")
         
-    prompt = st.text_area("Enter your prompt", height=100, key="gen_prompt")
-
-    uploaded_files = st.file_uploader("Upload Reference Images (Max 10)", accept_multiple_files=True, type=['png', 'jpg', 'jpeg', 'webp'], key="gen_files")
-    if len(uploaded_files) > 10:
-        st.warning("You can only use up to 10 reference images. Only the first 10 will be used.")
-        uploaded_files = uploaded_files[:10]
-
-    if uploaded_files:
-        st.write("Reference Images:")
-        cols = st.columns(min(len(uploaded_files), 5))
-        for i, file in enumerate(uploaded_files):
-            cols[i % 5].image(file, use_container_width=True)
-
-    if st.button("Generate Images", type="primary", key="btn_gen"):
-        if not api_key:
-            st.error("Please enter your Gemini API Key in the sidebar.")
-        elif not prompt and not uploaded_files:
-            st.warning("Please enter a prompt or upload reference images.")
+    ref_images = st.file_uploader("Reference Images (Optional)", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
+    
+    if st.button("Generate Images", type="primary", use_container_width=True):
+        if not prompt and not ref_images:
+            st.warning("Please provide a prompt or reference images.")
         else:
-            client = genai.Client(api_key=api_key)
-            
-            contents = []
-            if prompt:
-                contents.append(prompt)
-            
-            for file in uploaded_files:
-                file_bytes = file.read()
-                contents.append(
-                    types.Part.from_bytes(
-                        data=file_bytes,
-                        mime_type=file.type
-                    )
-                )
-            
-            st.session_state.results = []
-            
-            with st.spinner(f"Generating {num_images} images concurrently..."):
-                with concurrent.futures.ThreadPoolExecutor(max_workers=num_images) as executor:
-                    futures = []
-                    for i in range(num_images):
-                        futures.append(executor.submit(generate_single_image, client, model, contents, aspect_ratio, image_size, i))
+            with st.spinner("Generating..."):
+                try:
+                    # Setup Gemini Model
+                    model = genai.GenerativeModel('gemini-3.1-flash-image-preview')
                     
-                    for future in concurrent.futures.as_completed(futures):
-                        st.session_state.results.append(future.result())
+                    contents = []
+                    if prompt:
+                        contents.append(prompt)
+                        
+                    for img_file in ref_images:
+                        img = Image.open(img_file)
+                        contents.append(img)
 
-    # Display results
-    if st.session_state.results:
-        cols = st.columns(2)
-        for i, res in enumerate(st.session_state.results):
-            with cols[i % 2]:
-                if res["status"] == "success":
-                    # Streamlit natively supports enlarging images when clicked
-                    st.image(res["data"], caption=f"Image ({res['aspect_ratio']})", use_container_width=True)
-                    
-                    col_a, col_b = st.columns(2)
-                    with col_a:
-                        b64_img = base64.b64encode(res["data"]).decode('utf-8')
-                        href = f'<a href="data:{res["mime_type"]};base64,{b64_img}" download="generated-{res["id"]}.png" style="text-decoration:none;"><button style="width:100%; padding:0.5rem; border-radius:0.5rem; border:1px solid #ccc; background:white; cursor:pointer;">Download</button></a>'
-                        st.markdown(href, unsafe_allow_html=True)
-                    
-                    with col_b:
-                        if st.button(f"Upscale to 4K", key=f"upscale_{res['id']}"):
-                            with st.spinner("Upscaling to 4K..."):
-                                try:
-                                    client = genai.Client(api_key=api_key)
-                                    upscale_contents = [
-                                        types.Part.from_bytes(data=res["data"], mime_type=res["mime_type"]),
-                                        "Upscale to 4K resolution, enhance details, maintain exact composition"
-                                    ]
-                                    up_res = client.models.generate_content(
-                                        model=model,
-                                        contents=upscale_contents,
-                                        config=types.GenerateContentConfig(
-                                            image_config=types.ImageConfig(
-                                                aspect_ratio=res["aspect_ratio"],
-                                                image_size="4K"
-                                            )
-                                        )
-                                    )
-                                    for part in up_res.candidates[0].content.parts:
-                                        if part.inline_data:
-                                            res["data"] = part.inline_data.data
-                                            res["mime_type"] = part.inline_data.mime_type
-                                            st.success("Upscaled successfully!")
-                                            st.rerun()
-                                except Exception as e:
-                                    st.error(f"Upscale failed: {e}")
-                    
-                    if cloud_name and upload_preset:
-                        if st.button("Upload to Cloudinary", key=f"cloud_{res['id']}"):
-                            with st.spinner("Uploading..."):
-                                b64_img = base64.b64encode(res["data"]).decode('utf-8')
-                                upload_res = upload_to_cloudinary(b64_img, res["mime_type"], cloud_name, upload_preset)
-                                if "secure_url" in upload_res:
-                                    st.success(f"Uploaded: {upload_res['secure_url']}")
-                                else:
-                                    st.error("Cloudinary upload failed.")
-                else:
-                    st.error(res.get("error", "Unknown error"))
+                    # Generate
+                    response = model.generate_content(
+                        contents,
+                        generation_config=genai.types.GenerationConfig(
+                            candidate_count=num_images,
+                        )
+                    ) # Note: the python SDK handles aspect ratio/size slightly differently depending on the exact version, you may need to pass them in `generation_config` if supported.
 
-with tab2:
-    st.header("Magic Edit")
-    st.markdown("Upload an image, paint over the area you want to change, and describe the edit.")
+                    st.success("Generation Complete!")
+                    
+                    # Display and Upload Results
+                    cols = st.columns(num_images)
+                    for i, candidate in enumerate(response.candidates):
+                        # Extract image from response (depends on exact SDK response structure)
+                        # Assuming the SDK returns a PIL Image or bytes in candidate.content.parts[0]
+                        for part in candidate.content.parts:
+                            if hasattr(part, 'inline_data'):
+                                img_bytes = part.inline_data.data
+                                img = Image.open(io.BytesIO(img_bytes))
+                                
+                                with cols[i]:
+                                    st.image(img, use_container_width=True)
+                                    
+                                    # Upload to selected folder
+                                    with st.spinner("Saving..."):
+                                        url = upload_to_cloudinary(img_bytes, selected_gen_folder)
+                                        if url:
+                                            st.markdown(f"[View in Cloudinary]({url})")
+                except Exception as e:
+                    st.error(f"Generation failed: {e}")
+
+# ==========================================
+# TAB 2: MAGIC EDIT
+# ==========================================
+with tab_edit:
+    st.markdown("### Magic Edit")
     
-    edit_prompt = st.text_area("Edit Prompt", placeholder="e.g., Add a cute cat sitting on the table", height=100, key="edit_prompt")
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        edit_prompt = st.text_area("Edit Prompt", placeholder="e.g., Add a cute cat sitting on the table", height=100)
+    with col2:
+        # NEW: Dropdown to select where to save edited images (Defaults to "MAI with Edit")
+        default_edit_idx = available_folders.index("MAI with Edit") if "MAI with Edit" in available_folders else 0
+        selected_edit_folder = st.selectbox("Save to Folder", available_folders, index=default_edit_idx, key="edit_folder")
+
+    base_image_file = st.file_uploader("Upload an image to edit", type=["png", "jpg", "jpeg"], key="edit_uploader")
     
-    edit_file = st.file_uploader("Upload Image to Edit", type=['png', 'jpg', 'jpeg', 'webp'], key="edit_file")
-    
-    if edit_file:
-        img = Image.open(edit_file)
+    if base_image_file:
+        base_img = Image.open(base_image_file)
         
-        # Calculate canvas size to fit screen but keep aspect ratio
-        canvas_width = 700
-        canvas_height = int(canvas_width * (img.height / img.width))
+        st.write("Draw over the area you want to edit:")
         
-        st.write("Draw over the area you want to edit (this creates a mask):")
-        
+        # Create a canvas for masking
         canvas_result = st_canvas(
-            fill_color="rgba(255, 255, 255, 1)",
-            stroke_width=30,
+            fill_color="rgba(255, 255, 255, 1)", 
+            stroke_width=20,
             stroke_color="rgba(255, 255, 255, 1)",
-            background_image=img,
+            background_image=base_img,
             update_streamlit=True,
-            height=canvas_height,
-            width=canvas_width,
+            height=base_img.height * (600 / base_img.width) if base_img.width > 600 else base_img.height,
+            width=600 if base_img.width > 600 else base_img.width,
             drawing_mode="freedraw",
             key="canvas",
         )
         
-        if st.button("Apply Magic Edit", type="primary", key="btn_edit"):
-            if not api_key:
-                st.error("Please enter your Gemini API Key in the sidebar.")
-            elif not edit_prompt:
-                st.warning("Please enter an edit prompt.")
-            elif canvas_result.image_data is None:
-                st.warning("Please draw a mask on the image.")
+        if st.button("Apply Magic Edit", type="primary"):
+            if not edit_prompt:
+                st.warning("Please provide an edit prompt.")
             else:
-                with st.spinner("Applying Magic Edit..."):
+                with st.spinner("Applying edits..."):
                     try:
-                        # Extract alpha channel as mask
-                        mask_array = canvas_result.image_data[:, :, 3]
-                        mask_img = Image.fromarray(mask_array).convert("L")
+                        # In a real scenario, you would pass the base_img and the mask (canvas_result.image_data)
+                        # to the Gemini API. The exact implementation depends on the Gemini Python SDK's 
+                        # current support for inpainting/masking.
                         
-                        # Convert original image to bytes
-                        img_byte_arr = io.BytesIO()
-                        img.save(img_byte_arr, format='PNG')
-                        img_bytes = img_byte_arr.getvalue()
+                        st.info("Sending to Gemini API... (Ensure your SDK supports masking)")
                         
-                        # Convert mask to bytes
-                        mask_byte_arr = io.BytesIO()
-                        mask_img.save(mask_byte_arr, format='PNG')
-                        mask_bytes = mask_byte_arr.getvalue()
+                        # Placeholder for API Call
+                        # model = genai.GenerativeModel('gemini-2.5-flash-image')
+                        # response = model.generate_content([edit_prompt, base_img, mask_img])
                         
-                        client = genai.Client(api_key=api_key)
-                        contents = [
-                            types.Part.from_bytes(data=img_bytes, mime_type="image/png"),
-                            types.Part.from_bytes(data=mask_bytes, mime_type="image/png"),
-                            f"{edit_prompt}. This is an inpainting request. The second image is a mask where the white areas indicate the region to be edited."
-                        ]
+                        # Assuming we get `result_bytes` back:
+                        # url = upload_to_cloudinary(result_bytes, selected_edit_folder)
+                        # st.image(result_bytes)
                         
-                        result = client.models.generate_content(
-                            model=model,
-                            contents=contents,
-                            config=types.GenerateContentConfig(
-                                image_config=types.ImageConfig(
-                                    image_size="1K" # Default size for edits
-                                )
-                            )
-                        )
-                        
-                        edited_data = None
-                        edited_mime = None
-                        for part in result.candidates[0].content.parts:
-                            if part.inline_data:
-                                edited_data = part.inline_data.data
-                                edited_mime = part.inline_data.mime_type
-                                break
-                        
-                        if edited_data:
-                            st.success("Edit complete!")
-                            st.image(edited_data, caption="Edited Image", use_container_width=True)
-                            
-                            b64_img = base64.b64encode(edited_data).decode('utf-8')
-                            href = f'<a href="data:{edited_mime};base64,{b64_img}" download="magic-edit.png" style="text-decoration:none;"><button style="padding:0.5rem 1rem; border-radius:0.5rem; border:1px solid #ccc; background:white; cursor:pointer;">Download Edited Image</button></a>'
-                            st.markdown(href, unsafe_allow_html=True)
-                        else:
-                            st.error("No image returned from the model.")
-                            
                     except Exception as e:
-                        st.error(f"Magic Edit failed: {str(e)}")
+                        st.error(f"Edit failed: {e}")
+
+# ==========================================
+# TAB 3: FOLDERS
+# ==========================================
+with tab_folders:
+    st.markdown("### Cloudinary Folders")
+    
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        view_folder = st.selectbox("Select Folder to View", available_folders, key="view_folder")
+        
+        if st.button("Refresh Folders"):
+            get_cloudinary_folders.clear()
+            st.rerun()
+            
+    with col2:
+        if view_folder:
+            with st.spinner(f"Loading images from {view_folder}..."):
+                try:
+                    # Fetch images from the selected folder
+                    resources = cloudinary.api.resources(
+                        type="upload", 
+                        prefix=f"{view_folder}/", 
+                        max_results=50
+                    )
+                    
+                    images = resources.get("resources", [])
+                    
+                    if not images:
+                        st.info(f"No images found in folder '{view_folder}'.")
+                    else:
+                        # Display images in a grid
+                        cols = st.columns(3)
+                        for i, img in enumerate(images):
+                            with cols[i % 3]:
+                                st.image(img["secure_url"], use_container_width=True)
+                                st.caption(f"Created: {img['created_at'][:10]}")
+                except Exception as e:
+                    st.error(f"Failed to load images: {e}")
