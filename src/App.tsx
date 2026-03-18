@@ -20,32 +20,70 @@ export default function App() {
 }
 
 function MainApp() {
-  const [activeTab, setActiveTab] = useState<'generate' | 'magic-edit'>('generate');
+  const [activeTab, setActiveTab] = useState<'generate' | 'magic-edit' | 'folders'>('generate');
   const [showSettings, setShowSettings] = useState(false);
-  const [cloudinaryConfig, setCloudinaryConfig] = useState({ cloudName: '', uploadPreset: '' });
   const [enlargedImage, setEnlargedImage] = useState<string | null>(null);
   const [model, setModel] = useState("gemini-3.1-flash-image-preview");
+  
+  const [folders, setFolders] = useState<string[]>(['start']);
+  const [selectedFolder, setSelectedFolder] = useState<string>('start');
+  const [newFolder, setNewFolder] = useState('');
+
+  useEffect(() => {
+    fetch('/api/folders')
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          setFolders(data);
+        }
+      })
+      .catch(err => console.error("Failed to fetch folders", err));
+  }, []);
+
+  const handleCreateFolder = async () => {
+    if (!newFolder.trim()) return;
+    try {
+      const res = await fetch('/api/folders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder: newFolder.trim() })
+      });
+      if (res.ok) {
+        setFolders(prev => [...new Set([...prev, newFolder.trim()])]);
+        setSelectedFolder(newFolder.trim());
+        setNewFolder('');
+      }
+    } catch (err) {
+      console.error("Failed to create folder", err);
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-gray-50 text-gray-900 font-sans pb-12">
-      <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between sticky top-0 z-10">
+    <div className="min-h-screen bg-[#0e1117] text-white font-sans pb-12">
+      <header className="bg-[#262730] border-b border-[#31333F] px-6 py-4 flex items-center justify-between sticky top-0 z-10">
         <div className="flex items-center gap-6">
           <div className="flex items-center gap-2">
-            <ImageIcon className="w-6 h-6 text-indigo-600" />
+            <ImageIcon className="w-6 h-6 text-[#FF4B4B]" />
             <h1 className="text-xl font-semibold tracking-tight">Multi-Aspect Generator</h1>
           </div>
-          <div className="flex bg-gray-100 p-1 rounded-lg">
+          <div className="flex bg-[#31333F] p-1 rounded-lg">
             <button 
               onClick={() => setActiveTab('generate')}
-              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${activeTab === 'generate' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}
+              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${activeTab === 'generate' ? 'bg-[#262730] shadow-sm text-white' : 'text-gray-500 hover:text-gray-300'}`}
             >
               Generate
             </button>
             <button 
               onClick={() => setActiveTab('magic-edit')}
-              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors flex items-center gap-1.5 ${activeTab === 'magic-edit' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}
+              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors flex items-center gap-1.5 ${activeTab === 'magic-edit' ? 'bg-[#262730] shadow-sm text-white' : 'text-gray-500 hover:text-gray-300'}`}
             >
               <Wand2 className="w-4 h-4" /> Magic Edit
+            </button>
+            <button 
+              onClick={() => setActiveTab('folders')}
+              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors flex items-center gap-1.5 ${activeTab === 'folders' ? 'bg-[#262730] shadow-sm text-white' : 'text-gray-500 hover:text-gray-300'}`}
+            >
+              <UploadCloud className="w-4 h-4" /> Folders
             </button>
           </div>
         </div>
@@ -53,7 +91,7 @@ function MainApp() {
           <select 
             value={model} 
             onChange={e => setModel(e.target.value)} 
-            className="p-2 border border-gray-200 rounded-lg bg-gray-50 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+            className="p-2 border border-[#31333F] rounded-lg bg-[#0e1117] focus:ring-2 focus:ring-[#FF4B4B] outline-none text-sm"
           >
             <option value="gemini-3.1-flash-image-preview">Gemini 3.1 Flash Image</option>
             <option value="gemini-3-pro-image-preview">Gemini 3 Pro Image</option>
@@ -61,7 +99,7 @@ function MainApp() {
           </select>
           <button 
             onClick={() => setShowSettings(true)}
-            className="p-2 text-gray-500 hover:bg-gray-100 rounded-full transition-colors"
+            className="p-2 text-gray-500 hover:bg-[#31333F] rounded-full transition-colors"
             title="Settings"
           >
             <Settings className="w-5 h-5" />
@@ -73,14 +111,23 @@ function MainApp() {
         {activeTab === 'generate' ? (
           <GenerateTab 
             model={model} 
-            cloudinaryConfig={cloudinaryConfig} 
+            folders={folders}
+            selectedFolder={selectedFolder} 
+            setSelectedFolder={setSelectedFolder}
+            onEnlarge={setEnlargedImage} 
+          />
+        ) : activeTab === 'magic-edit' ? (
+          <MagicEditTab 
+            model={model} 
+            folders={folders}
+            selectedFolder={selectedFolder} 
+            setSelectedFolder={setSelectedFolder}
             onEnlarge={setEnlargedImage} 
           />
         ) : (
-          <MagicEditTab 
-            model={model} 
-            cloudinaryConfig={cloudinaryConfig} 
-            onEnlarge={setEnlargedImage} 
+          <FoldersTab 
+            folders={folders}
+            onEnlarge={setEnlargedImage}
           />
         )}
       </main>
@@ -101,38 +148,49 @@ function MainApp() {
       {/* Settings Modal */}
       {showSettings && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Settings</h2>
-              <button onClick={() => setShowSettings(false)} className="text-gray-400 hover:text-gray-600 cursor-pointer">
+          <div className="bg-[#262730] rounded-2xl shadow-xl max-w-md w-full overflow-hidden">
+            <div className="px-6 py-4 border-b border-[#31333F] flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Settings & Storage</h2>
+              <button onClick={() => setShowSettings(false)} className="text-gray-500 hover:text-gray-600 cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
             <div className="p-6">
               <div className="mb-6">
-                <h3 className="text-sm font-medium text-gray-900 mb-1">Cloudinary Integration</h3>
-                <p className="text-xs text-gray-500 mb-4">Configure unsigned uploads to automatically host generated images.</p>
+                <h3 className="text-sm font-medium text-white mb-1">Cloudinary Storage Folder</h3>
+                <p className="text-xs text-gray-500 mb-4">Choose where generated images are saved.</p>
                 
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">Cloud Name</label>
-                    <input 
-                      type="text" 
-                      value={cloudinaryConfig.cloudName}
-                      onChange={e => setCloudinaryConfig(prev => ({...prev, cloudName: e.target.value}))}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                      placeholder="e.g. dxxxxxxx"
-                    />
+                    <label className="block text-xs font-medium text-gray-300 mb-1">Select Default Folder</label>
+                    <select 
+                      value={selectedFolder}
+                      onChange={e => setSelectedFolder(e.target.value)}
+                      className="w-full px-3 py-2 border border-[#31333F] rounded-lg text-sm focus:ring-2 focus:ring-[#FF4B4B] outline-none"
+                    >
+                      {folders.map(f => (
+                        <option key={f} value={f}>{f}</option>
+                      ))}
+                    </select>
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">Upload Preset (Unsigned)</label>
-                    <input 
-                      type="text" 
-                      value={cloudinaryConfig.uploadPreset}
-                      onChange={e => setCloudinaryConfig(prev => ({...prev, uploadPreset: e.target.value}))}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                      placeholder="e.g. my_preset"
-                    />
+                    <label className="block text-xs font-medium text-gray-300 mb-1">Create New Folder</label>
+                    <div className="flex gap-2">
+                      <input 
+                        type="text" 
+                        value={newFolder}
+                        onChange={e => setNewFolder(e.target.value)}
+                        className="flex-1 px-3 py-2 border border-[#31333F] rounded-lg text-sm focus:ring-2 focus:ring-[#FF4B4B] outline-none"
+                        placeholder="e.g. project-x"
+                      />
+                      <button 
+                        onClick={handleCreateFolder}
+                        disabled={!newFolder.trim()}
+                        className="bg-[#FF4B4B] hover:bg-[#FF6B6B] disabled:bg-[#FF4B4B]/50 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                      >
+                        Create
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -151,7 +209,7 @@ function MainApp() {
   );
 }
 
-function GenerateTab({ model, cloudinaryConfig, onEnlarge }: { model: string, cloudinaryConfig: any, onEnlarge: (url: string) => void }) {
+function GenerateTab({ model, folders, selectedFolder, setSelectedFolder, onEnlarge }: { model: string, folders: string[], selectedFolder: string, setSelectedFolder: (f: string) => void, onEnlarge: (url: string) => void }) {
   const [prompt, setPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [results, setResults] = useState<Array<{id: string, aspectRatio: string, url: string, status: string, error?: string, cloudinaryUrl?: string}>>([]);
@@ -188,14 +246,11 @@ function GenerateTab({ model, cloudinaryConfig, onEnlarge }: { model: string, cl
   };
 
   const uploadToCloudinary = async (base64Image: string, id: string) => {
-    if (!cloudinaryConfig.cloudName || !cloudinaryConfig.uploadPreset) return;
     try {
-      const formData = new FormData();
-      formData.append('file', base64Image);
-      formData.append('upload_preset', cloudinaryConfig.uploadPreset);
-      const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudinaryConfig.cloudName}/image/upload`, {
+      const res = await fetch('/api/upload', {
         method: 'POST',
-        body: formData
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: base64Image, folder: selectedFolder })
       });
       const data = await res.json();
       if (data.secure_url) {
@@ -314,49 +369,25 @@ function GenerateTab({ model, cloudinaryConfig, onEnlarge }: { model: string, cl
 
   return (
     <>
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 mb-8">
+      <div className="bg-[#262730] rounded-2xl shadow-sm border border-[#31333F] p-6 mb-8">
         <div className="mb-4">
-          <label className="block text-sm font-medium text-gray-700 mb-2">Image Prompt</label>
+          <label className="block text-sm font-medium text-gray-300 mb-2">Image Prompt</label>
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             placeholder="Describe the image you want to generate..."
-            className="w-full h-24 p-4 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-none transition-all"
+            className="w-full h-24 p-4 bg-[#0e1117] border border-[#31333F] rounded-xl focus:ring-2 focus:ring-[#FF4B4B] focus:border-[#FF4B4B] outline-none resize-none transition-all"
             disabled={isGenerating}
           />
         </div>
 
-        <div className="mb-6">
-          <label className="block text-sm font-medium text-gray-700 mb-2">Reference Images (Max 10)</label>
-          <div className="flex flex-wrap gap-3">
-            {referenceImages.map((img, i) => (
-              <div key={i} className="relative w-20 h-20 rounded-lg border border-gray-200 overflow-hidden group shadow-sm">
-                <img src={img.url} alt="ref" className="w-full h-full object-cover" />
-                <button 
-                  onClick={() => removeImage(i)} 
-                  className="absolute top-1 right-1 bg-white/90 rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
-                >
-                  <XCircle className="w-4 h-4 text-red-500" />
-                </button>
-              </div>
-            ))}
-            {referenceImages.length < 10 && (
-              <label className="w-20 h-20 rounded-lg border-2 border-dashed border-gray-300 flex flex-col items-center justify-center cursor-pointer hover:bg-gray-50 hover:border-indigo-300 transition-colors">
-                <Upload className="w-5 h-5 text-gray-400 mb-1" />
-                <span className="text-[10px] text-gray-500 font-medium">Upload</span>
-                <input type="file" accept="image/*" multiple className="hidden" onChange={handleFileUpload} disabled={isGenerating} />
-              </label>
-            )}
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Aspect Ratio</label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Aspect Ratio</label>
             <select 
               value={aspectRatio} 
               onChange={e => setAspectRatio(e.target.value)} 
-              className="w-full p-2.5 border border-gray-200 rounded-xl bg-gray-50 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+              className="w-full p-2.5 border border-[#31333F] rounded-xl bg-[#0e1117] focus:ring-2 focus:ring-[#FF4B4B] outline-none text-sm"
               disabled={isGenerating}
             >
               <option value="1:1">1:1 (Square)</option>
@@ -371,11 +402,11 @@ function GenerateTab({ model, cloudinaryConfig, onEnlarge }: { model: string, cl
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Quality</label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Quality</label>
             <select 
               value={imageSize} 
               onChange={e => setImageSize(e.target.value)} 
-              className="w-full p-2.5 border border-gray-200 rounded-xl bg-gray-50 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+              className="w-full p-2.5 border border-[#31333F] rounded-xl bg-[#0e1117] focus:ring-2 focus:ring-[#FF4B4B] outline-none text-sm"
               disabled={isGenerating}
             >
               <option value="1K">1K (Standard)</option>
@@ -384,23 +415,58 @@ function GenerateTab({ model, cloudinaryConfig, onEnlarge }: { model: string, cl
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Number of Images</label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Number of Images</label>
             <select 
               value={numImages} 
               onChange={e => setNumImages(Number(e.target.value))} 
-              className="w-full p-2.5 border border-gray-200 rounded-xl bg-gray-50 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+              className="w-full p-2.5 border border-[#31333F] rounded-xl bg-[#0e1117] focus:ring-2 focus:ring-[#FF4B4B] outline-none text-sm"
               disabled={isGenerating}
             >
               {[1,2,3,4].map(n => <option key={n} value={n}>{n}</option>)}
             </select>
           </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Save to Folder</label>
+            <select 
+              value={selectedFolder} 
+              onChange={e => setSelectedFolder(e.target.value)} 
+              className="w-full p-2.5 border border-[#31333F] rounded-xl bg-[#0e1117] focus:ring-2 focus:ring-[#FF4B4B] outline-none text-sm"
+              disabled={isGenerating}
+            >
+              {folders.map(f => <option key={f} value={f}>{f}</option>)}
+            </select>
+          </div>
         </div>
 
-        <div className="flex items-center justify-end border-t border-gray-100 pt-4">
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-gray-300 mb-2">Reference Images (Max 10)</label>
+          <div className="flex flex-wrap gap-3">
+            {referenceImages.map((img, i) => (
+              <div key={i} className="relative w-20 h-20 rounded-lg border border-[#31333F] overflow-hidden group shadow-sm">
+                <img src={img.url} alt="ref" className="w-full h-full object-cover" />
+                <button 
+                  onClick={() => removeImage(i)} 
+                  className="absolute top-1 right-1 bg-[#262730]/90 rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
+                >
+                  <XCircle className="w-4 h-4 text-red-500" />
+                </button>
+              </div>
+            ))}
+            {referenceImages.length < 10 && (
+              <label className="w-20 h-20 rounded-lg border-2 border-dashed border-[#31333F] flex flex-col items-center justify-center cursor-pointer hover:bg-[#0e1117] hover:border-[#FF4B4B] transition-colors">
+                <Upload className="w-5 h-5 text-gray-500 mb-1" />
+                <span className="text-[10px] text-gray-500 font-medium">Upload</span>
+                <input type="file" accept="image/*" multiple className="hidden" onChange={handleFileUpload} disabled={isGenerating} />
+              </label>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end border-t border-[#31333F] pt-4">
           <button
             onClick={handleGenerate}
             disabled={isGenerating || (!prompt.trim() && referenceImages.length === 0)}
-            className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-8 py-3 rounded-xl font-medium flex items-center gap-2 transition-colors cursor-pointer shadow-sm"
+            className="bg-[#FF4B4B] hover:bg-[#FF6B6B] disabled:bg-[#FF4B4B]/50 text-white px-8 py-3 rounded-xl font-medium flex items-center gap-2 transition-colors cursor-pointer shadow-sm"
           >
             {isGenerating ? (
               <><Loader2 className="w-5 h-5 animate-spin" /> Generating Concurrently...</>
@@ -416,17 +482,17 @@ function GenerateTab({ model, cloudinaryConfig, onEnlarge }: { model: string, cl
             const isUpscaling = result.status === 'upscaling';
             
             return (
-              <div key={result.id} className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col">
-                <div className="px-4 py-3 border-b border-gray-100 bg-gray-50/50 flex items-center justify-between">
-                  <span className="font-medium text-sm text-gray-700">
-                    Image {i + 1} <span className="text-gray-400 font-normal">({result.aspectRatio})</span>
+              <div key={result.id} className="bg-[#262730] rounded-2xl shadow-sm border border-[#31333F] overflow-hidden flex flex-col">
+                <div className="px-4 py-3 border-b border-[#31333F] bg-[#0e1117]/50 flex items-center justify-between">
+                  <span className="font-medium text-sm text-gray-300">
+                    Image {i + 1} <span className="text-gray-500 font-normal">({result.aspectRatio})</span>
                   </span>
                   {result.status === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
                   {result.status === 'error' && <AlertCircle className="w-4 h-4 text-red-500" />}
                   {(isPending || isUpscaling) && <Loader2 className="w-4 h-4 text-indigo-500 animate-spin" />}
                 </div>
                 
-                <div className="p-4 flex-1 flex flex-col items-center justify-center min-h-[300px] bg-gray-50">
+                <div className="p-4 flex-1 flex flex-col items-center justify-center min-h-[300px] bg-[#0e1117]">
                   {result.status === 'success' || isUpscaling ? (
                     <div className="w-full flex flex-col items-center gap-4">
                       <div className="relative w-full flex justify-center group">
@@ -447,7 +513,7 @@ function GenerateTab({ model, cloudinaryConfig, onEnlarge }: { model: string, cl
                         )}
                         {isUpscaling && (
                           <div className="absolute inset-0 flex items-center justify-center">
-                            <div className="bg-white/90 px-4 py-2 rounded-full shadow-md flex items-center gap-2 text-sm font-medium text-indigo-600">
+                            <div className="bg-[#262730]/90 px-4 py-2 rounded-full shadow-md flex items-center gap-2 text-sm font-medium text-[#FF4B4B]">
                               <Loader2 className="w-4 h-4 animate-spin" /> Upscaling to 4K...
                             </div>
                           </div>
@@ -457,14 +523,14 @@ function GenerateTab({ model, cloudinaryConfig, onEnlarge }: { model: string, cl
                         <a 
                           href={result.url} 
                           download={`generated-${result.aspectRatio.replace(':', '-')}-${i+1}.png`}
-                          className="flex-1 flex items-center justify-center gap-2 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 py-2 px-3 rounded-lg text-sm font-medium transition-colors"
+                          className="flex-1 flex items-center justify-center gap-2 bg-[#262730] border border-[#31333F] hover:bg-[#0e1117] text-gray-300 py-2 px-3 rounded-lg text-sm font-medium transition-colors"
                         >
                           <Download className="w-4 h-4" /> Download
                         </a>
                         <button
                           onClick={() => handleUpscale(result.id)}
                           disabled={isUpscaling}
-                          className="flex-1 flex items-center justify-center gap-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 py-2 px-3 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                          className="flex-1 flex items-center justify-center gap-2 bg-indigo-900/30 hover:bg-indigo-100 text-indigo-300 border border-indigo-800 py-2 px-3 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
                         >
                           <Maximize className="w-4 h-4" /> Upscale 4K
                         </button>
@@ -473,7 +539,7 @@ function GenerateTab({ model, cloudinaryConfig, onEnlarge }: { model: string, cl
                             href={result.cloudinaryUrl}
                             target="_blank"
                             rel="noreferrer"
-                            className="w-full flex items-center justify-center gap-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 py-2 px-3 rounded-lg text-sm font-medium transition-colors mt-1"
+                            className="w-full flex items-center justify-center gap-2 bg-emerald-900/30 hover:bg-emerald-100 text-emerald-300 border border-emerald-800 py-2 px-3 rounded-lg text-sm font-medium transition-colors mt-1"
                           >
                             <UploadCloud className="w-4 h-4" /> Cloudinary Link
                           </a>
@@ -501,7 +567,7 @@ function GenerateTab({ model, cloudinaryConfig, onEnlarge }: { model: string, cl
   );
 }
 
-function MagicEditTab({ model, cloudinaryConfig, onEnlarge }: { model: string, cloudinaryConfig: any, onEnlarge: (url: string) => void }) {
+function MagicEditTab({ model, folders, selectedFolder, setSelectedFolder, onEnlarge }: { model: string, folders: string[], selectedFolder: string, setSelectedFolder: (f: string) => void, onEnlarge: (url: string) => void }) {
   const [prompt, setPrompt] = useState('');
   const [baseImage, setBaseImage] = useState<string | null>(null);
   const [baseMimeType, setBaseMimeType] = useState<string>('');
@@ -650,6 +716,17 @@ function MagicEditTab({ model, cloudinaryConfig, onEnlarge }: { model: string, c
 
       if (newBase64Image) {
         setResultUrl(newBase64Image);
+        
+        // Upload to Cloudinary
+        try {
+          await fetch('/api/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: newBase64Image, folder: selectedFolder })
+          });
+        } catch (uploadErr) {
+          console.error("Failed to upload to Cloudinary:", uploadErr);
+        }
       } else {
         alert("No image returned from the model.");
       }
@@ -662,24 +739,37 @@ function MagicEditTab({ model, cloudinaryConfig, onEnlarge }: { model: string, c
   };
 
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 mb-8">
-      <div className="mb-6">
-        <label className="block text-sm font-medium text-gray-700 mb-2">Edit Prompt</label>
-        <textarea
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          placeholder="e.g., Add a cute cat sitting on the table"
-          className="w-full h-20 p-4 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-none transition-all"
-          disabled={isGenerating}
-        />
+    <div className="bg-[#262730] rounded-2xl shadow-sm border border-[#31333F] p-6 mb-8">
+      <div className="mb-6 grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="md:col-span-3">
+          <label className="block text-sm font-medium text-gray-300 mb-2">Edit Prompt</label>
+          <textarea
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder="e.g., Add a cute cat sitting on the table"
+            className="w-full h-20 p-4 bg-[#0e1117] border border-[#31333F] rounded-xl focus:ring-2 focus:ring-[#FF4B4B] focus:border-[#FF4B4B] outline-none resize-none transition-all"
+            disabled={isGenerating}
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-2">Save to Folder</label>
+          <select 
+            value={selectedFolder} 
+            onChange={e => setSelectedFolder(e.target.value)} 
+            className="w-full p-2.5 border border-[#31333F] rounded-xl bg-[#0e1117] focus:ring-2 focus:ring-[#FF4B4B] outline-none text-sm"
+            disabled={isGenerating}
+          >
+            {folders.map(f => <option key={f} value={f}>{f}</option>)}
+          </select>
+        </div>
       </div>
 
       {!baseImage ? (
-        <div className="border-2 border-dashed border-gray-300 rounded-2xl p-12 text-center">
-          <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-          <h3 className="text-lg font-medium text-gray-900 mb-1">Upload an image to edit</h3>
+        <div className="border-2 border-dashed border-[#31333F] rounded-2xl p-12 text-center">
+          <Upload className="w-12 h-12 text-gray-500 mx-auto mb-4" />
+          <h3 className="text-lg font-medium text-white mb-1">Upload an image to edit</h3>
           <p className="text-sm text-gray-500 mb-4">PNG, JPG up to 10MB</p>
-          <label className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-6 py-2.5 rounded-xl font-medium cursor-pointer transition-colors inline-block">
+          <label className="bg-[#262730] border border-[#31333F] text-gray-300 hover:bg-[#0e1117] px-6 py-2.5 rounded-xl font-medium cursor-pointer transition-colors inline-block">
             Browse Files
             <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
           </label>
@@ -689,7 +779,7 @@ function MagicEditTab({ model, cloudinaryConfig, onEnlarge }: { model: string, c
           {/* Editor Area */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <label className="block text-sm font-medium text-gray-700">Paint Mask</label>
+              <label className="block text-sm font-medium text-gray-300">Paint Mask</label>
               <div className="flex items-center gap-4">
                 <div className="flex items-center gap-2">
                   <Paintbrush className="w-4 h-4 text-gray-500" />
@@ -702,11 +792,11 @@ function MagicEditTab({ model, cloudinaryConfig, onEnlarge }: { model: string, c
                   />
                 </div>
                 <button onClick={clearMask} className="text-xs text-red-600 hover:text-red-700 font-medium">Clear Mask</button>
-                <button onClick={() => setBaseImage(null)} className="text-xs text-gray-500 hover:text-gray-700 font-medium">Change Image</button>
+                <button onClick={() => setBaseImage(null)} className="text-xs text-gray-500 hover:text-gray-300 font-medium">Change Image</button>
               </div>
             </div>
             
-            <div className="relative rounded-xl overflow-hidden border border-gray-200 bg-gray-100 inline-block w-full" style={{ touchAction: 'none' }}>
+            <div className="relative rounded-xl overflow-hidden border border-[#31333F] bg-[#31333F] inline-block w-full" style={{ touchAction: 'none' }}>
               <img 
                 ref={imgRef} 
                 src={baseImage} 
@@ -733,8 +823,8 @@ function MagicEditTab({ model, cloudinaryConfig, onEnlarge }: { model: string, c
 
           {/* Result Area */}
           <div className="flex flex-col">
-            <label className="block text-sm font-medium text-gray-700 mb-2">Result</label>
-            <div className="flex-1 border border-gray-200 rounded-xl bg-gray-50 flex items-center justify-center relative overflow-hidden min-h-[300px]">
+            <label className="block text-sm font-medium text-gray-300 mb-2">Result</label>
+            <div className="flex-1 border border-[#31333F] rounded-xl bg-[#0e1117] flex items-center justify-center relative overflow-hidden min-h-[300px]">
               {isGenerating ? (
                 <div className="text-center text-indigo-500">
                   <Loader2 className="w-8 h-8 mx-auto mb-3 animate-spin" />
@@ -752,7 +842,7 @@ function MagicEditTab({ model, cloudinaryConfig, onEnlarge }: { model: string, c
                   </button>
                 </div>
               ) : (
-                <div className="text-center text-gray-400">
+                <div className="text-center text-gray-500">
                   <Wand2 className="w-12 h-12 mx-auto mb-2 opacity-20" />
                   <p className="text-sm">Your edited image will appear here</p>
                 </div>
@@ -764,7 +854,7 @@ function MagicEditTab({ model, cloudinaryConfig, onEnlarge }: { model: string, c
                 <a 
                   href={resultUrl} 
                   download="magic-edit-result.png"
-                  className="flex items-center gap-2 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 py-2.5 px-4 rounded-xl text-sm font-medium transition-colors"
+                  className="flex items-center gap-2 bg-[#262730] border border-[#31333F] hover:bg-[#0e1117] text-gray-300 py-2.5 px-4 rounded-xl text-sm font-medium transition-colors"
                 >
                   <Download className="w-4 h-4" /> Download Result
                 </a>
@@ -773,13 +863,99 @@ function MagicEditTab({ model, cloudinaryConfig, onEnlarge }: { model: string, c
               <button
                 onClick={handleMagicEdit}
                 disabled={isGenerating || !prompt.trim()}
-                className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-8 py-2.5 rounded-xl font-medium flex items-center gap-2 transition-colors cursor-pointer shadow-sm"
+                className="bg-[#FF4B4B] hover:bg-[#FF6B6B] disabled:bg-[#FF4B4B]/50 text-white px-8 py-2.5 rounded-xl font-medium flex items-center gap-2 transition-colors cursor-pointer shadow-sm"
               >
                 {isGenerating ? <Loader2 className="w-5 h-5 animate-spin" /> : <Wand2 className="w-5 h-5" />}
                 Apply Magic Edit
               </button>
             </div>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FoldersTab({ folders, onEnlarge }: { folders: string[], onEnlarge: (url: string) => void }) {
+  const [selectedFolder, setSelectedFolder] = useState<string>('start');
+  const [images, setImages] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (folders.length > 0 && !folders.includes(selectedFolder)) {
+      setSelectedFolder(folders[0]);
+    }
+  }, [folders, selectedFolder]);
+
+  useEffect(() => {
+    if (!selectedFolder) return;
+    setLoading(true);
+    fetch(`/api/images/${selectedFolder}`)
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          setImages(data);
+        }
+      })
+      .catch(err => console.error("Failed to fetch images", err))
+      .finally(() => setLoading(false));
+  }, [selectedFolder]);
+
+  return (
+    <div className="bg-[#262730] rounded-2xl shadow-sm border border-[#31333F] p-6 mb-8">
+      <div className="mb-6 flex items-center justify-between">
+        <h2 className="text-lg font-medium text-white">Cloudinary Folders</h2>
+        <select 
+          value={selectedFolder}
+          onChange={e => setSelectedFolder(e.target.value)}
+          className="px-4 py-2 border border-[#31333F] rounded-xl bg-[#0e1117] focus:ring-2 focus:ring-[#FF4B4B] outline-none text-sm"
+        >
+          {folders.map(f => (
+            <option key={f} value={f}>{f}</option>
+          ))}
+        </select>
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center items-center py-12">
+          <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" />
+        </div>
+      ) : images.length > 0 ? (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {images.map((img) => (
+            <div key={img.public_id} className="relative group rounded-xl overflow-hidden border border-[#31333F] bg-[#0e1117] aspect-square">
+              <img 
+                src={img.url} 
+                alt="Cloudinary Image" 
+                className="w-full h-full object-cover"
+                referrerPolicy="no-referrer"
+              />
+              <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                <button 
+                  onClick={() => onEnlarge(img.url)}
+                  className="bg-white/20 hover:bg-white/40 text-white p-2 rounded-lg transition-colors"
+                  title="Enlarge"
+                >
+                  <Maximize className="w-5 h-5" />
+                </button>
+                <a 
+                  href={img.url}
+                  download
+                  target="_blank"
+                  rel="noreferrer"
+                  className="bg-white/20 hover:bg-white/40 text-white p-2 rounded-lg transition-colors"
+                  title="Download"
+                >
+                  <Download className="w-5 h-5" />
+                </a>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="text-center text-gray-500 py-12">
+          <ImageIcon className="w-12 h-12 mx-auto mb-2 opacity-20" />
+          <p className="text-sm">No images found in this folder</p>
         </div>
       )}
     </div>
@@ -814,25 +990,25 @@ function ApiKeyCheck({ children }: { children: React.ReactNode }) {
     }
   };
 
-  if (checking) return <div className="flex items-center justify-center h-screen bg-gray-50"><Loader2 className="w-8 h-8 text-indigo-500 animate-spin" /></div>;
+  if (checking) return <div className="flex items-center justify-center h-screen bg-[#0e1117]"><Loader2 className="w-8 h-8 text-indigo-500 animate-spin" /></div>;
 
   if (!hasKey) {
     return (
-      <div className="flex flex-col items-center justify-center h-screen bg-gray-50 p-4 font-sans">
-        <div className="max-w-md w-full bg-white rounded-2xl shadow-sm border border-gray-200 p-8 text-center">
+      <div className="flex flex-col items-center justify-center h-screen bg-[#0e1117] p-4 font-sans">
+        <div className="max-w-md w-full bg-[#262730] rounded-2xl shadow-sm border border-[#31333F] p-8 text-center">
           <ImageIcon className="w-12 h-12 mx-auto text-indigo-500 mb-4" />
-          <h1 className="text-2xl font-bold text-gray-900 mb-2">API Key Required</h1>
+          <h1 className="text-2xl font-bold text-white mb-2">API Key Required</h1>
           <p className="text-gray-600 mb-6 text-sm">
             To generate high-quality images with Gemini 3.1 Flash, you need to select a Google Cloud project with billing enabled.
           </p>
           <button
             onClick={handleSelectKey}
-            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 px-4 rounded-xl transition-colors cursor-pointer"
+            className="w-full bg-[#FF4B4B] hover:bg-[#FF6B6B] text-white font-medium py-3 px-4 rounded-xl transition-colors cursor-pointer"
           >
             Select API Key
           </button>
           <p className="mt-4 text-xs text-gray-500">
-            <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">
+            <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="text-[#FF4B4B] hover:underline">
               Learn more about billing
             </a>
           </p>
