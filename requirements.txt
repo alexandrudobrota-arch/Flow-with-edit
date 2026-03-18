@@ -1,5 +1,5 @@
 streamlit
-google-genai
-requests
-streamlit-drawable-canvas
+cloudinary
+google-generativeai
 Pillow
+streamlit-drawable-canvas
